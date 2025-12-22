@@ -21,8 +21,6 @@ portable-atomic = { version = "1.11", features = ["unsafe-assume-single-core"] }
 static_cell = { version = "2.1.1", features = ["nightly"] }
 
 embedded-io-async = { version = "0.6.1" }
-derive_more = { version = "2.0.1", features = ["constructor"], default-features = false }
-once_cell = { version = "1.21.3", features = ["portable-atomic", "critical-section"], default-features = false }
 
 [profile.release]
 debug = 2

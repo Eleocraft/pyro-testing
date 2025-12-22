@@ -1,50 +1,55 @@
 mod factory_calibrated_values;
+mod util;
 
-use derive_more::Constructor;
+use embassy_time::Timer;
+use util::Sortable;
+
 use embassy_stm32::{
     Peri,
     adc::{Adc, AdcChannel, AnyAdcChannel, RxDma, SampleTime},
-    peripherals::ADC1,
+    peripherals::{ADC1, DMA1_CH1},
 };
 use embassy_sync::watch::DynSender;
 use heapless::Vec;
 
-use util::Sortable;
-mod util {
-    use core::cmp::Ordering;
-    use heapless::Vec;
-    pub trait Sortable<T> {
-        fn sort_by<F: FnMut(&T, &T) -> Ordering>(&mut self, cmp: F);
-    }
-    
-    impl<T, const N: usize> Sortable<T> for Vec<T, N> {
-        fn sort_by<F: FnMut(&T, &T) -> Ordering>(&mut self, mut cmp: F) {
-            for i in 0..self.len() {
-                for j in i + 1..self.len() {
-                    if cmp(&self[i], &self[j]) == Ordering::Greater {
-                        self.swap(i, j);
-                    }
-                }
-            }
-        }
+// Adc reading task
+#[embassy_executor::task]
+pub async fn adc_thread(mut adc: AdcCtrl<'static, 'static, DMA1_CH1, 4>) {
+    const ADC_LOOP_LEN_MS: u64 = 50;
+    loop {
+        adc.run().await;
+        Timer::after_millis(ADC_LOOP_LEN_MS).await;
     }
 }
 
-#[derive(Constructor)]
 pub struct AdcCtrlChannel<'a> {
     channel: AnyAdcChannel<ADC1>,
-    sender: DynSender<'a, i16>,
-    conversion_func: fn(u16) -> i16,
+    sender: Option<DynSender<'a, i16>>,
+    conversion_func: fn(u16, u16) -> i16,
 }
+impl<'a> AdcCtrlChannel<'a> {
+    pub fn new(
+        channel: AnyAdcChannel<ADC1>,
+        sender: DynSender<'a, i16>,
+        conversion_func: fn(u16, u16) -> i16
+    ) -> Self {
+        Self { channel, sender: Some(sender), conversion_func }
+    }
+    fn new_ref(
+        channel: AnyAdcChannel<ADC1>,
+    ) -> Self {
+        Self { channel, sender: None, conversion_func: |_,_|{0} }
+    }
+}
+
 
 pub mod conversion {
     use super::factory_calibrated_values::FactoryCalibratedValues;
-    use once_cell::sync::Lazy;
+    use embassy_sync::lazy_lock::LazyLock;
 
-    static CALIB: Lazy<FactoryCalibratedValues> = Lazy::new(|| FactoryCalibratedValues::new());
+    static CALIB: LazyLock<FactoryCalibratedValues> = LazyLock::new(|| FactoryCalibratedValues::new());
 
     // datasheet reference conditions
-    const VREF_10MV: i32 = 3_30;
     const VREF_CALIB_10MV: i32 = 3_00;
     const TS_1_VAL_TENTH_DEG: i32 = 30_0;
     const TS_2_VAL_TENTH_DEG: i32 = 130_0;
@@ -52,25 +57,34 @@ pub mod conversion {
 
     const RAW_VALUE_RANGE_X100: i32 = 4096_00;
 
-    // voltage divider
+    // == Voltage divider == 
     const R1_OHM: i32 = 27;
     const R2_OHM: i32 = 100;
+
     const V_DIVIDER_MULT: i32 = (R1_OHM + R2_OHM) / R2_OHM;
 
-    pub fn calculate_temperature_tenth_deg(measurement: u16) -> i16 {
+    fn calculate_vref(calib_measurement: u16) -> i32 {
+        let vref_measurement_x100 = 100 * calib_measurement as i32;
+        VREF_CALIB_10MV * CALIB.get().v_refint_x100 / vref_measurement_x100
+    }
+
+    pub fn calculate_temperature_tenth_deg(measurement: u16, calib_measurement: u16) -> i16 {
+        let vref_10mv = calculate_vref(calib_measurement);
         let temp_measurement_x10 = 10 * measurement as i32;
-        let temp_calibrated_measurement = temp_measurement_x10 * VREF_10MV / VREF_CALIB_10MV;
+        let temp_calibrated_measurement = temp_measurement_x10 * vref_10mv / VREF_CALIB_10MV;
+        let calib = CALIB.get();
         let temp_tenth_deg = TS_REL_VAL_TENTH_DEG
-            * (temp_calibrated_measurement - CALIB.ts_cal_1_x10)
-            / CALIB.ts_cal_rel_x10
+            * (temp_calibrated_measurement - calib.ts_cal_1_x10)
+            / calib.ts_cal_rel_x10
             + TS_1_VAL_TENTH_DEG;
         temp_tenth_deg as i16
     }
 
-    pub fn calculate_voltage_10mv(measurement: u16) -> i16 {
+    pub fn calculate_voltage_10mv(measurement: u16, calib_measurement: u16) -> i16 {
+        let vref_10mv = calculate_vref(calib_measurement);
         let vbat_1_measurement_x100 = 100 * measurement as i32;
         let voltage_mv =
-            vbat_1_measurement_x100 * V_DIVIDER_MULT * VREF_10MV / RAW_VALUE_RANGE_X100;
+            vbat_1_measurement_x100 * V_DIVIDER_MULT * vref_10mv / RAW_VALUE_RANGE_X100;
         voltage_mv as i16
     }
 }
@@ -100,8 +114,10 @@ impl<'a, 'd, D: RxDma<ADC1>, const N: usize> AdcCtrl<'a, 'd, D, N> {
             temp_sender,
             conversion::calculate_temperature_tenth_deg,
         );
+        let ref_channel = AdcCtrlChannel::new_ref(adc.enable_vrefint().degrade_adc());
         let mut channels: Vec<AdcCtrlChannel<'a>, N> = external_channels.into_iter().collect();
         channels.push(temp_channel).ok();
+        channels.push(ref_channel).ok();
         channels.sort_by(|c1, c2| {
             c1.channel
                 .get_hw_channel()
@@ -129,17 +145,27 @@ impl<'a, 'd, D: RxDma<ADC1>, const N: usize> AdcCtrl<'a, 'd, D, N> {
         Vec::from_array(measurements)
     }
     fn convert(&self, values: Vec<u16, N>) -> Vec<i16, N> {
+        let v_ref_measurement: u16 = self.channels
+            .iter()
+            .zip(&values)
+            .find(|(c, _)| c.sender.is_none())
+            .map(|(_, v)| *v).unwrap();
+
         self.channels
             .iter()
             .zip(values)
-            .map(|(c, v)| (c.conversion_func)(v))
+            .map(|(c, v)| (c.conversion_func)(v, v_ref_measurement))
             .collect()
     }
     fn send(&self, values: Vec<i16, N>) {
         self.channels
             .iter()
             .zip(values)
-            .for_each(|(c, v)| c.sender.send(v));
+            .for_each(|(c, v)| 
+                if let Some(sender) = c.sender.as_ref() {
+                    sender.send(v)
+                }
+            );
     }
 
     pub async fn run(&mut self) {
@@ -148,3 +174,4 @@ impl<'a, 'd, D: RxDma<ADC1>, const N: usize> AdcCtrl<'a, 'd, D, N> {
         self.send(converted_values);
     }
 }
+
