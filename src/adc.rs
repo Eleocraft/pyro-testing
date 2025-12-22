@@ -92,6 +92,7 @@ pub mod conversion {
 pub struct AdcCtrl<'a, 'd, D: RxDma<ADC1>, const N: usize> {
     adc: Adc<'d, ADC1>,
     dma_channel: Peri<'d, D>,
+    ref_channel_idx: usize,
     // adc channels
     channels: Vec<AdcCtrlChannel<'a>, N>,
 }
@@ -101,7 +102,7 @@ impl<'a, 'd, D: RxDma<ADC1>, const N: usize> AdcCtrl<'a, 'd, D, N> {
         mut adc: Adc<'d, ADC1>,
         dma_channel: Peri<'d, D>,
         temp_sender: DynSender<'a, i16>,
-        external_channels: [AdcCtrlChannel<'a>; N - 1],
+        external_channels: [AdcCtrlChannel<'a>; N - 2],
     ) -> Self {
         adc.set_resolution(embassy_stm32::adc::Resolution::BITS12);
         // 16x oversampling
@@ -123,10 +124,12 @@ impl<'a, 'd, D: RxDma<ADC1>, const N: usize> AdcCtrl<'a, 'd, D, N> {
                 .get_hw_channel()
                 .cmp(&c2.channel.get_hw_channel())
         });
+        let ref_channel_idx = channels.iter().position(|c| c.sender.is_none()).unwrap();
 
         Self {
             adc,
             dma_channel,
+            ref_channel_idx,
             channels,
         }
     }
@@ -145,11 +148,7 @@ impl<'a, 'd, D: RxDma<ADC1>, const N: usize> AdcCtrl<'a, 'd, D, N> {
         Vec::from_array(measurements)
     }
     fn convert(&self, values: Vec<u16, N>) -> Vec<i16, N> {
-        let v_ref_measurement: u16 = self.channels
-            .iter()
-            .zip(&values)
-            .find(|(c, _)| c.sender.is_none())
-            .map(|(_, v)| *v).unwrap();
+        let v_ref_measurement: u16 = values[self.ref_channel_idx];
 
         self.channels
             .iter()

@@ -113,7 +113,7 @@ async fn main(spawner: Spawner) {
         adc::conversion::calculate_voltage_10mv
     );
 
-    let mut adc: AdcCtrl<'_, '_, _, 3> = AdcCtrl::new(adc_periph, p.DMA1_CH1, temp_watch.sender().as_dyn(), [out_a_channel, out_b_channel]);
+    let mut adc: AdcCtrl<'_, '_, _, 4> = AdcCtrl::new(adc_periph, p.DMA1_CH1, temp_watch.sender().as_dyn(), [out_a_channel, out_b_channel]);
     
     current_test_watch.sender().send(0);
     spawner.must_spawn(run_tasks(current_test_watch.sender(), button, safe_a, fire_a, safe_b, fire_b));
