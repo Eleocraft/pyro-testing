@@ -17,47 +17,24 @@ use static_cell::StaticCell;
 
 use {defmt_rtt as _, panic_probe as _};
 
-fn reset(safe_a: &mut Output<'static>, fire_a: &mut Output<'static>, safe_b: &mut Output<'static>, fire_b: &mut Output<'static>) {
-    safe_a.set_high();
-    fire_a.set_low();
-    safe_b.set_high();
-    fire_b.set_low();
+macro_rules! test {
+    ($name:ident, $safe_a:expr, $fire_a:expr, $safe_b:expr, $fire_b:expr) => {
+        fn $name(safe_a: &mut Output<'static>, fire_a: &mut Output<'static>, safe_b: &mut Output<'static>, fire_b: &mut Output<'static>) {
+            safe_a.set_level($safe_a);
+            fire_a.set_level($fire_a);
+            safe_b.set_level($safe_b);
+            fire_b.set_level($fire_b);
+        }
+    };
 }
 
-fn test_1(safe_a: &mut Output<'static>, fire_a: &mut Output<'static>, safe_b: &mut Output<'static>, fire_b: &mut Output<'static>) {
-    safe_a.set_low();
-    fire_a.set_low();
-    safe_b.set_low();
-    fire_b.set_low();
-}
-
-fn test_2(safe_a: &mut Output<'static>, fire_a: &mut Output<'static>, safe_b: &mut Output<'static>, fire_b: &mut Output<'static>) {
-    safe_a.set_low();
-    fire_a.set_high();
-    safe_b.set_low();
-    fire_b.set_low();
-}
-
-fn test_3(safe_a: &mut Output<'static>, fire_a: &mut Output<'static>, safe_b: &mut Output<'static>, fire_b: &mut Output<'static>) {
-    safe_a.set_high();
-    fire_a.set_low();
-    safe_b.set_high();
-    fire_b.set_low();
-}
-
-fn test_4(safe_a: &mut Output<'static>, fire_a: &mut Output<'static>, safe_b: &mut Output<'static>, fire_b: &mut Output<'static>) {
-    safe_a.set_high();
-    fire_a.set_high();
-    safe_b.set_high();
-    fire_b.set_low();
-}
-
-fn test_5(safe_a: &mut Output<'static>, fire_a: &mut Output<'static>, safe_b: &mut Output<'static>, fire_b: &mut Output<'static>) {
-    safe_a.set_high();
-    fire_a.set_high();
-    safe_b.set_high();
-    fire_b.set_high();
-}
+use Level::*;
+test!(reset, High, Low, High, Low);
+test!(test_1, Low, Low, Low, Low);
+test!(test_2, Low, High, Low, Low);
+test!(test_3, High, Low, High, Low);
+test!(test_4, High, High, High, Low);
+test!(test_5, High, High, High, High);
 
 #[embassy_executor::task]
 async fn run_tasks(
