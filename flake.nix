@@ -31,7 +31,6 @@
           ];
         };
         profile = pkgs.fenix.complete;
-        rust-analyzer = pkgs.fenix.rust-analyzer;
         std-lib = pkgs.fenix.targets.thumbv6m-none-eabi.latest;
         rust-toolchain = pkgs.fenix.combine [
           profile.rustc-unwrapped
@@ -47,7 +46,7 @@
         pkgs.mkShell {
           buildInputs = with pkgs; [
             rust-toolchain
-            rust-analyzer
+            rust-analyzer-nightly
 
             # extra cargo tools
             cargo-edit
